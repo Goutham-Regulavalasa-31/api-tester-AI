@@ -5,7 +5,7 @@ from pydantic import BaseModel  # type: ignore[import]
 from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime  # type: ignore[import]
 from sqlalchemy.ext.declarative import declarative_base  # type: ignore[import]
 from sqlalchemy.orm import sessionmaker, Session  # type: ignore[import]
-from passlib.context import CryptContext  # type: ignore[import]
+import bcrypt as _bcrypt
 from jose import JWTError, jwt  # type: ignore[import]
 from datetime import datetime, timedelta
 from typing import Optional, Any
@@ -13,7 +13,6 @@ import httpx
 import time
 import json
 import os
-import anthropic  # type: ignore[import]
 
 # ─── Database setup ────────────────────────────────────────────────────────────
 
@@ -55,8 +54,7 @@ SECRET_KEY  = "deviq-secret-key-change-in-production"
 ALGORITHM   = "HS256"
 TOKEN_EXPIRE_MINUTES = 60 * 24 * 7   # 7 days
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-bearer      = HTTPBearer()
+bearer = HTTPBearer()
 
 
 # ─── App ───────────────────────────────────────────────────────────────────────
@@ -86,11 +84,11 @@ def get_db():
 # ─── Auth helpers ──────────────────────────────────────────────────────────────
 
 def hash_password(plain: str) -> str:
-    return pwd_context.hash(plain)
+    return _bcrypt.hashpw(plain.encode(), _bcrypt.gensalt()).decode()
 
 
 def verify_password(plain: str, hashed: str) -> bool:
-    return pwd_context.verify(plain, hashed)
+    return _bcrypt.checkpw(plain.encode(), hashed.encode())
 
 
 def create_token(user_id: int) -> str:
@@ -271,7 +269,8 @@ class AIExplainRequest(BaseModel):
 
 # ─── AI helper ─────────────────────────────────────────────────────────────────
 
-def get_ai_client() -> anthropic.Anthropic:
+def get_ai_client():
+    import anthropic  # type: ignore[import]
     key = os.environ.get("ANTHROPIC_API_KEY", "")
     if not key:
         raise HTTPException(
@@ -379,3 +378,6 @@ def ai_explain(
         }],
     )
     return {"explanation": msg.content[0].text}
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="127.0.0.1", port=8000, reload=True)
