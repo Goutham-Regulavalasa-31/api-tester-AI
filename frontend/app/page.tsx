@@ -416,6 +416,34 @@ function Sparkline({ values }: { values: number[] }) {
   );
 }
 
+// ─── Simple Markdown renderer ─────────────────────────────────────────────────
+
+function renderInline(text: string): React.ReactNode {
+  const parts = text.split(/(\*\*[^*]+\*\*)/g);
+  if (parts.length === 1) return text;
+  return parts.map((p, i) =>
+    p.startsWith("**") && p.endsWith("**")
+      ? <strong key={i} className="text-white font-semibold">{p.slice(2, -2)}</strong>
+      : p
+  );
+}
+
+function SimpleMarkdown({ text }: { text: string }) {
+  return (
+    <div className="text-xs text-slate-300 leading-relaxed">
+      {text.split("\n").map((line, i) => {
+        if (line.startsWith("### ")) return <p key={i} className="font-semibold text-white mt-2">{line.slice(4)}</p>;
+        if (line.startsWith("## "))  return <p key={i} className="font-bold text-white mt-2">{line.slice(3)}</p>;
+        if (line.startsWith("# "))   return <p key={i} className="font-bold text-white mt-2">{line.slice(2)}</p>;
+        if (line.startsWith("- ") || line.startsWith("* "))
+          return <div key={i} className="flex gap-1.5 ml-1"><span className="text-violet-400 shrink-0 mt-0.5">•</span><span>{renderInline(line.slice(2))}</span></div>;
+        if (line.trim() === "") return <div key={i} className="h-1.5" />;
+        return <p key={i}>{renderInline(line)}</p>;
+      })}
+    </div>
+  );
+}
+
 // ─── Activity bar config ────────────────────────────────────────────────────────
 
 type SidebarTab = "collections" | "history" | "environment" | "tests" | "ai" | "settings";
@@ -478,6 +506,13 @@ export default function Home() {
   // ── Tests ─────────────────────────────────────────────────────────────────
   const [testScript, setTestScript]   = useState("");
   const [testResults, setTestResults] = useState<AssertionResult[]>([]);
+
+  // ── AI assistant ──────────────────────────────────────────────────────────
+  const [aiPrompt, setAiPrompt]               = useState("");
+  const [aiLoading, setAiLoading]             = useState<"generate" | "debug" | "explain" | null>(null);
+  const [aiError, setAiError]                 = useState("");
+  const [aiDebugResult, setAiDebugResult]     = useState("");
+  const [aiExplainResult, setAiExplainResult] = useState("");
 
   // ── cURL import ───────────────────────────────────────────────────────────
   const [showCurlImport, setShowCurlImport] = useState(false);
@@ -558,6 +593,7 @@ export default function Home() {
     if (!url.trim()) { setError("Please enter a URL"); return; }
 
     setLoading(true); setError(""); setResponse(null); setTestResults([]);
+    setAiDebugResult(""); setAiExplainResult(""); setAiError("");
     setActiveTab("response");
 
     const resolvedUrl     = applyEnv(url.trim(), envVars);
@@ -733,6 +769,87 @@ export default function Home() {
     setBody(result.body);
     setResponse(null); setTestResults([]); setActiveTab("headers"); setError("");
     setCurlInput(""); setShowCurlImport(false);
+  }
+
+  // ─── AI helpers ────────────────────────────────────────────────────────────
+
+  async function aiGenerateRequest() {
+    if (!aiPrompt.trim()) return;
+    setAiLoading("generate");
+    setAiError("");
+    const token = localStorage.getItem("deviq_token");
+    try {
+      const res = await axios.post(`${API_BASE}/ai/generate`, { prompt: aiPrompt }, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const { method: m, url: u, headers: h, body: b } = res.data;
+      if (m) setMethod(m as HttpMethod);
+      if (u) setUrl(u);
+      if (Array.isArray(h) && h.length > 0) setHeaders(h);
+      if (b) setBody(b);
+      setAiPrompt("");
+      setActiveTab("headers");
+    } catch (err: unknown) {
+      setAiError(
+        axios.isAxiosError(err) && err.response?.data?.detail
+          ? err.response.data.detail
+          : "AI request failed — check your backend logs."
+      );
+    } finally {
+      setAiLoading(null);
+    }
+  }
+
+  async function aiDebug() {
+    if (!response) return;
+    setAiLoading("debug");
+    setAiError("");
+    setAiDebugResult("");
+    const token = localStorage.getItem("deviq_token");
+    try {
+      const res = await axios.post(`${API_BASE}/ai/debug`, {
+        method,
+        url: sentUrl || url,
+        status_code: response.status_code,
+        response_body: response.body,
+        response_time_ms: response.response_time_ms,
+      }, { headers: { Authorization: `Bearer ${token}` } });
+      setAiDebugResult(res.data.analysis);
+    } catch (err: unknown) {
+      setAiError(
+        axios.isAxiosError(err) && err.response?.data?.detail
+          ? err.response.data.detail
+          : "AI debug failed — check your backend logs."
+      );
+    } finally {
+      setAiLoading(null);
+    }
+  }
+
+  async function aiExplain() {
+    if (!response) return;
+    setAiLoading("explain");
+    setAiError("");
+    setAiExplainResult("");
+    const token = localStorage.getItem("deviq_token");
+    try {
+      const res = await axios.post(`${API_BASE}/ai/explain`, {
+        method,
+        url: sentUrl || url,
+        status_code: response.status_code,
+        response_body: response.body,
+        response_headers: response.headers,
+      }, { headers: { Authorization: `Bearer ${token}` } });
+      setAiExplainResult(res.data.explanation);
+    } catch (err: unknown) {
+      setAiError(
+        axios.isAxiosError(err) && err.response?.data?.detail
+          ? err.response.data.detail
+          : "AI explain failed — check your backend logs."
+      );
+    } finally {
+      setAiLoading(null);
+    }
   }
 
   // ─── Request-tab helpers ───────────────────────────────────────────────────
@@ -940,13 +1057,35 @@ export default function Home() {
                     </button>
                   </div>
 
-                  <div className="bg-slate-700/20 border border-slate-700/40 rounded-xl p-4 opacity-50">
-                    <div className="flex items-center gap-2 mb-1">
-                      <Sparkles size={13} className="text-slate-500" />
-                      <span className="text-xs font-semibold text-slate-500">Plain-English Generator</span>
-                      <span className="text-xs bg-slate-700 text-slate-500 px-1.5 py-0.5 rounded ml-auto">Soon</span>
+                  <div className="bg-violet-900/20 border border-violet-700/40 rounded-xl p-4 flex flex-col gap-3">
+                    <div className="flex items-center gap-2">
+                      <Sparkles size={13} className="text-violet-400" />
+                      <span className="text-xs font-semibold text-violet-300">Plain-English Generator</span>
                     </div>
-                    <p className="text-xs text-slate-600">Describe a request in plain English and let AI build it.</p>
+                    <p className="text-xs text-slate-500">Describe a request and AI will fill in the URL, method, headers, and body.</p>
+                    <textarea
+                      value={aiPrompt}
+                      onChange={(e) => { setAiPrompt(e.target.value); setAiError(""); }}
+                      onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) aiGenerateRequest(); }}
+                      rows={3}
+                      placeholder={"Get all posts from JSONPlaceholder\nCreate a user with name and email\nDelete post with id 5"}
+                      className="w-full bg-slate-900 text-slate-300 font-mono text-xs rounded-lg p-2.5 border border-slate-600 focus:outline-none focus:ring-1 focus:ring-violet-500 resize-none placeholder-slate-600"
+                    />
+                    {aiError && aiLoading === null && (
+                      <p className="text-red-400 text-xs bg-red-900/20 border border-red-800/40 rounded px-2 py-1.5">{aiError}</p>
+                    )}
+                    <button
+                      type="button"
+                      onClick={aiGenerateRequest}
+                      disabled={!aiPrompt.trim() || aiLoading === "generate"}
+                      className="text-xs bg-violet-600 hover:bg-violet-500 disabled:opacity-40 disabled:cursor-not-allowed text-white px-3 py-1.5 rounded-lg font-medium transition-colors flex items-center gap-1.5"
+                    >
+                      {aiLoading === "generate"
+                        ? <><div className="w-3 h-3 border border-white border-t-transparent rounded-full animate-spin" /> Generating…</>
+                        : <><Sparkles size={11} /> Generate Request</>
+                      }
+                    </button>
+                    <p className="text-xs text-slate-600">Tip: <kbd className="bg-slate-700 px-1 py-0.5 rounded text-slate-500">Ctrl+Enter</kbd> to generate</p>
                   </div>
                 </div>
               )}
@@ -1275,6 +1414,59 @@ export default function Home() {
                       <div className="bg-slate-900 rounded-lg border border-slate-700 overflow-auto max-h-96">
                         <pre className="p-4 text-sm text-green-300 font-mono whitespace-pre-wrap break-words">{formatBody(response.body)}</pre>
                       </div>
+                      {/* AI action buttons */}
+                      <div className="flex items-center gap-2 flex-wrap">
+                        {!response.success && (
+                          <button
+                            type="button"
+                            onClick={aiDebug}
+                            disabled={aiLoading === "debug"}
+                            className="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg bg-red-900/20 hover:bg-red-900/30 border border-red-700/40 text-red-300 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                          >
+                            {aiLoading === "debug"
+                              ? <><div className="w-3 h-3 border border-red-300 border-t-transparent rounded-full animate-spin" /> Analysing…</>
+                              : <><Sparkles size={11} /> Debug with AI</>
+                            }
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          onClick={aiExplain}
+                          disabled={aiLoading === "explain"}
+                          className="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg bg-violet-900/20 hover:bg-violet-900/30 border border-violet-700/40 text-violet-300 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                        >
+                          {aiLoading === "explain"
+                            ? <><div className="w-3 h-3 border border-violet-300 border-t-transparent rounded-full animate-spin" /> Explaining…</>
+                            : <><Sparkles size={11} /> Explain Response</>
+                          }
+                        </button>
+                        {aiError && aiLoading === null && (
+                          <p className="text-red-400 text-xs">{aiError}</p>
+                        )}
+                      </div>
+
+                      {/* AI debug result */}
+                      {aiDebugResult && (
+                        <div className="bg-red-900/10 border border-red-700/30 rounded-lg p-4">
+                          <div className="flex items-center gap-1.5 mb-3">
+                            <Sparkles size={12} className="text-red-400" />
+                            <span className="text-xs font-semibold text-red-300">AI Debug Analysis</span>
+                          </div>
+                          <SimpleMarkdown text={aiDebugResult} />
+                        </div>
+                      )}
+
+                      {/* AI explain result */}
+                      {aiExplainResult && (
+                        <div className="bg-violet-900/10 border border-violet-700/30 rounded-lg p-4">
+                          <div className="flex items-center gap-1.5 mb-3">
+                            <Sparkles size={12} className="text-violet-400" />
+                            <span className="text-xs font-semibold text-violet-300">AI Response Explanation</span>
+                          </div>
+                          <SimpleMarkdown text={aiExplainResult} />
+                        </div>
+                      )}
+
                       <button type="button" onClick={() => setShowResponseHeaders(!showResponseHeaders)} aria-label="Toggle response headers" className="flex items-center gap-1 text-xs text-slate-400 hover:text-slate-200">
                         {showResponseHeaders ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
                         Response Headers ({Object.keys(response.headers).length})

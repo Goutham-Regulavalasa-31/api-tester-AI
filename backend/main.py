@@ -12,6 +12,8 @@ from typing import Optional, Any
 import httpx
 import time
 import json
+import os
+import anthropic
 
 # ─── Database setup ────────────────────────────────────────────────────────────
 
@@ -245,3 +247,135 @@ async def execute_request(
 @app.get("/")
 def health():
     return {"status": "DevIQ API running"}
+
+
+# ─── AI schemas ────────────────────────────────────────────────────────────────
+
+class AIGenerateRequest(BaseModel):
+    prompt: str
+
+class AIDebugRequest(BaseModel):
+    method:           str
+    url:              str
+    status_code:      int
+    response_body:    str
+    response_time_ms: float
+
+class AIExplainRequest(BaseModel):
+    method:           str
+    url:              str
+    status_code:      int
+    response_body:    str
+    response_headers: dict
+
+
+# ─── AI helper ─────────────────────────────────────────────────────────────────
+
+def get_ai_client() -> anthropic.Anthropic:
+    key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not key:
+        raise HTTPException(
+            status_code=503,
+            detail="AI features are disabled — set ANTHROPIC_API_KEY in the backend environment.",
+        )
+    return anthropic.Anthropic(api_key=key)
+
+
+AI_MODEL = "claude-haiku-4-5-20251001"
+
+
+# ─── AI endpoints ──────────────────────────────────────────────────────────────
+
+@app.post("/ai/generate")
+def ai_generate(
+    req: AIGenerateRequest,
+    current_user: User = Depends(get_current_user),
+):
+    client = get_ai_client()
+    msg = client.messages.create(
+        model=AI_MODEL,
+        max_tokens=512,
+        messages=[{
+            "role": "user",
+            "content": (
+                "You are an API request generator. Convert this plain-English description into an API request.\n\n"
+                f"Description: {req.prompt}\n\n"
+                "Respond with ONLY a JSON object — no markdown fences, no explanation — in this exact shape:\n"
+                '{"method":"GET","url":"https://example.com/path","headers":[{"key":"Content-Type","value":"application/json","enabled":true}],"body":""}\n\n'
+                "Rules:\n"
+                "- method: one of GET POST PUT DELETE PATCH\n"
+                "- url: a realistic URL — guess if not specified\n"
+                "- headers: include Content-Type: application/json when there is a body\n"
+                "- body: a JSON string or empty string\n"
+                "- Return ONLY the JSON object."
+            ),
+        }],
+    )
+    raw = msg.content[0].text.strip()
+    # strip accidental markdown fences
+    if raw.startswith("```"):
+        raw = raw.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=500, detail="AI returned an unparseable response — try rephrasing.")
+
+
+@app.post("/ai/debug")
+def ai_debug(
+    req: AIDebugRequest,
+    current_user: User = Depends(get_current_user),
+):
+    client = get_ai_client()
+    msg = client.messages.create(
+        model=AI_MODEL,
+        max_tokens=768,
+        messages=[{
+            "role": "user",
+            "content": (
+                "You are an API debugging expert. Analyse this failed request and explain what went wrong.\n\n"
+                f"Request: {req.method} {req.url}\n"
+                f"Status: {req.status_code}\n"
+                f"Response time: {req.response_time_ms}ms\n"
+                f"Response body:\n{req.response_body[:2000]}\n\n"
+                "Provide:\n"
+                "**What went wrong** — one sentence summary\n"
+                "**Likely causes** — 2-3 bullet points\n"
+                "**How to fix it** — concrete steps\n\n"
+                "Be concise and practical. Use markdown."
+            ),
+        }],
+    )
+    return {"analysis": msg.content[0].text}
+
+
+@app.post("/ai/explain")
+def ai_explain(
+    req: AIExplainRequest,
+    current_user: User = Depends(get_current_user),
+):
+    client = get_ai_client()
+    ct = next(
+        (v for k, v in req.response_headers.items() if k.lower() == "content-type"),
+        "unknown",
+    )
+    msg = client.messages.create(
+        model=AI_MODEL,
+        max_tokens=768,
+        messages=[{
+            "role": "user",
+            "content": (
+                "You are an API response explainer. Explain this response to a developer.\n\n"
+                f"Request: {req.method} {req.url}\n"
+                f"Status: {req.status_code}\n"
+                f"Content-Type: {ct}\n"
+                f"Response body:\n{req.response_body[:2000]}\n\n"
+                "Provide:\n"
+                "**Summary** — what this response means in one sentence\n"
+                "**Key fields** — explain the important fields in the data\n"
+                "**Next steps** — what a developer would typically do with this\n\n"
+                "Be concise and practical. Use markdown."
+            ),
+        }],
+    )
+    return {"explanation": msg.content[0].text}
