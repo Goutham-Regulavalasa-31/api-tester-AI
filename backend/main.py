@@ -1,19 +1,19 @@
-from fastapi import FastAPI, HTTPException, Depends
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from pydantic import BaseModel
-from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker, Session
-from passlib.context import CryptContext
-from jose import JWTError, jwt
+from fastapi import FastAPI, HTTPException, Depends  # type: ignore[import]
+from fastapi.middleware.cors import CORSMiddleware  # type: ignore[import]
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials  # type: ignore[import]
+from pydantic import BaseModel  # type: ignore[import]
+from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime  # type: ignore[import]
+from sqlalchemy.ext.declarative import declarative_base  # type: ignore[import]
+from sqlalchemy.orm import sessionmaker, Session  # type: ignore[import]
+from passlib.context import CryptContext  # type: ignore[import]
+from jose import JWTError, jwt  # type: ignore[import]
 from datetime import datetime, timedelta
 from typing import Optional, Any
 import httpx
 import time
 import json
 import os
-import anthropic
+import anthropic  # type: ignore[import]
 
 # ─── Database setup ────────────────────────────────────────────────────────────
 
